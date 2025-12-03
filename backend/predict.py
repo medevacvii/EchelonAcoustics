@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import librosa
-from backend.preprocessing import load_audio, chunk_audio
+from backend.preprocessing import load_audio, chunk_audio, stream_audio_chunks
 from backend.model_loader import load_vgg_model
 
 MODEL_PATH = "model/vgg_frog_model.pth"
@@ -19,16 +19,22 @@ def to_melspec(chunk):
 
 
 def analyze_audio(audio_bytes):
-    y, sr = load_audio(audio_bytes)
-    chunks = chunk_audio(y, sr)
     detections = []
+    model, label_map, device = load_vgg_model(MODEL_PATH, LABELS_PATH)
 
-    for chunk, start, end in chunks:
+    start_time = 0.0
+    CHUNK_SEC = 5.0
 
-        # Convert WAV chunk → Mel spectrogram
-        S_dB = to_melspec(chunk)
+    for chunk, sr in stream_audio_chunks(audio_bytes, CHUNK_SEC):
 
-        # Shape → (1, 1, 128, time_frames)
+        # Convert chunk → mel-spectrogram
+        S = librosa.feature.melspectrogram(
+            y=chunk,
+            sr=sr,
+            n_mels=128
+        )
+        S_dB = librosa.power_to_db(S, ref=np.max)
+
         x = torch.tensor(S_dB, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
 
         with torch.no_grad():
@@ -39,10 +45,12 @@ def analyze_audio(audio_bytes):
         species = label_map[str(int(pred.item()))]
 
         detections.append({
-            "start": float(start),
-            "end": float(end),
+            "start": start_time,
+            "end": start_time + CHUNK_SEC,
             "species": species,
             "confidence": float(conf.item())
         })
+
+        start_time += CHUNK_SEC
 
     return detections

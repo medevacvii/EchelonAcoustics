@@ -119,12 +119,20 @@ st.sidebar.markdown(
 uploaded_files = st.file_uploader(
     "Upload frog audio file(s) (WAV/MP3)",
     type=["wav", "mp3"],
-    accept_multiple_files=True,
+    accept_multiple_files=True
 )
 
-if not uploaded_files:
-    st.info("Upload one or more audio files to begin.")
-    st.stop()
+MAX_MB = 200   # limit per file
+
+if uploaded_files:
+    for f in uploaded_files:
+        if f.size > MAX_MB * 1024 * 1024:
+            st.error(f"❌ File '{f.name}' is too large. Max allowed is {MAX_MB} MB.")
+            st.stop()
+
+if f.size > 100 * 1024 * 1024:
+    st.warning(f"⚠ '{f.name}' is large ({f.size/1024/1024:.1f} MB). "
+               "Processing may take a while.")
 
 file_names = [f.name for f in uploaded_files]
 
