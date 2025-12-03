@@ -1,24 +1,27 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import librosa
 import librosa.display
 import soundfile as sf
 import io
-import pandas as pd
 
 from backend.predict import analyze_audio
 
+# =============================================================================
+# PAGE CONFIG
+# =============================================================================
 st.set_page_config(
     page_title="Frog Call Classifier",
     layout="wide"
 )
 
 # =============================================================================
-# SAFE VISUALIZATION FUNCTION (SHOW ONLY FIRST 10 SECONDS)
+# SAFE VISUALIZATION FUNCTION (FIRST 10s ONLY)
 # =============================================================================
 def get_visualization_data(audio_bytes, max_vis_sec=10):
-    """Load ONLY the first few seconds for visualization (large-file safe)."""
+    """Load ONLY the first few seconds for visualization (safe for huge files)."""
     try:
         bio = io.BytesIO(audio_bytes)
 
@@ -28,12 +31,16 @@ def get_visualization_data(audio_bytes, max_vis_sec=10):
             f.seek(0)
             y = f.read(frames, dtype="float32")
 
-        # Resample for consistent visualization
+        # Resample for consistent display
         y_vis = librosa.resample(y, orig_sr=sr, target_sr=22050)
         sr_vis = 22050
 
-        # Create Mel Spectrogram
-        S = librosa.feature.melspectrogram(y=y_vis, sr=sr_vis, n_mels=128)
+        # Mel Spectrogram
+        S = librosa.feature.melspectrogram(
+            y=y_vis,
+            sr=sr_vis,
+            n_mels=128
+        )
         S_dB = librosa.power_to_db(S, ref=np.max)
 
         return y_vis, sr_vis, S_dB
@@ -44,17 +51,16 @@ def get_visualization_data(audio_bytes, max_vis_sec=10):
 
 
 # =============================================================================
-# MAIN PAGE HEADER
+# HEADER
 # =============================================================================
 st.title("🐸 Frog Call Classifier")
-
 st.write(
     "Upload frog audio recordings to analyze species, timestamps, "
-    "and confidence scores. Large files are processed safely in streaming mode."
+    "and confidence scores. Supports very large audio files using safe streaming."
 )
 
 # =============================================================================
-# FILE UPLOADER
+# FILE UPLOAD
 # =============================================================================
 uploaded_files = st.file_uploader(
     "Upload frog audio file(s) (WAV/MP3)",
@@ -64,17 +70,12 @@ uploaded_files = st.file_uploader(
 
 MAX_MB = 200
 
-# -----------------------------------------------------------------------------
-# Require file upload first
-# -----------------------------------------------------------------------------
 if not uploaded_files:
     st.info("Upload one or more audio files to begin analysis.")
     st.stop()
 
-# Safe list of file names
 file_names = [f.name for f in uploaded_files]
 
-# Single-file selector for detailed view
 selected_file_name = st.selectbox("Select a file to inspect", file_names)
 
 # =============================================================================
@@ -85,7 +86,6 @@ for f in uploaded_files:
     if f.name != selected_file_name:
         continue
 
-    # File size checks
     if f.size > MAX_MB * 1024 * 1024:
         st.error(
             f"❌ File '{f.name}' is too large "
@@ -99,20 +99,23 @@ for f in uploaded_files:
             "Processing may take a while."
         )
 
-    # Read bytes (for backend streaming inference)
     audio_bytes = f.read()
 
     # =============================================================================
-    # SAFE WAVEFORM + SPECTROGRAM VISUALIZATION
+    # AUDIO PLAYER
     # =============================================================================
     st.subheader("🎧 Full Audio Playback")
     st.audio(audio_bytes)
 
-    st.subheader("📈 Waveform & Spectrogram Preview (first 10 seconds, safe for large files)")
+    # =============================================================================
+    # SAFE WAVEFORM + SPECTROGRAM
+    # =============================================================================
+    st.subheader("📈 Waveform & Spectrogram Preview (first 10 seconds)")
 
     y_vis, sr_vis, S_vis = get_visualization_data(audio_bytes)
 
     if y_vis is not None:
+
         col1, col2 = st.columns(2)
 
         with col1:
@@ -125,31 +128,44 @@ for f in uploaded_files:
         with col2:
             st.write("**Spectrogram**")
             fig, ax = plt.subplots(figsize=(7, 3))
-            librosa.display.specshow(S_vis, sr=sr_vis, x_axis="time", y_axis="mel", ax=ax)
+
+            # Correct spectrogram display — capture image handle
+            img = librosa.display.specshow(
+                S_vis,
+                sr=sr_vis,
+                x_axis="time",
+                y_axis="mel",
+                ax=ax
+            )
+
             ax.set_title("Mel Spectrogram (dB, First 10 Seconds)")
-            fig.colorbar(ax.images[0], ax=ax, format="%+2.f dB")
+            fig.colorbar(img, ax=ax, format="%+2.f dB")
             st.pyplot(fig)
 
     # =============================================================================
-    # RUN STREAMING INFERENCE
+    # STREAMING INFERENCE
     # =============================================================================
-    st.subheader(f"📊 Results for: {f.name}")
+    st.subheader(f"📊 Model Detection Results for: {f.name}")
 
-    with st.spinner("Analyzing full audio (streaming, large-file safe)..."):
+    with st.spinner("Analyzing full audio (streaming mode)..."):
         detections = analyze_audio(audio_bytes)
 
     df_raw = pd.DataFrame(detections)
     st.dataframe(df_raw, use_container_width=True)
 
     # =============================================================================
-    # SPECIES TIMELINE PLOT
+    # TIMELINE PLOT
     # =============================================================================
     st.subheader("📌 Species Timeline")
 
     if not df_raw.empty:
-        fig, ax = plt.subplots(figsize=(10, 2))
+        fig, ax = plt.subplots(figsize=(12, 2))
         for _, row in df_raw.iterrows():
-            ax.plot([row["start"], row["end"]], [row["species"], row["species"]], linewidth=6)
+            ax.plot(
+                [row["start"], row["end"]],
+                [row["species"], row["species"]],
+                linewidth=6
+            )
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Species")
         ax.set_title("Detected Calls Over Time")
@@ -159,6 +175,7 @@ for f in uploaded_files:
     # CONFIDENCE SUMMARY
     # =============================================================================
     st.subheader("📊 Average Confidence per Species")
+
     if not df_raw.empty:
         conf_summary = df_raw.groupby("species")["confidence"].mean().reset_index()
         fig, ax = plt.subplots(figsize=(6, 3))
