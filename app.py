@@ -122,15 +122,20 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-MAX_MB = 200   # maximum allowed per file
+MAX_MB = 200
 
 if uploaded_files:
 
-    file_names = [f.name for f in uploaded_files]  # safe here
+    file_names = [f.name for f in uploaded_files]
+
+    # ---- File selector for multi-file mode ----
+    selected_file_name = st.selectbox("Select a file to inspect", file_names)
 
     for f in uploaded_files:
 
-        # ---- File size check (must be inside the loop) ----
+        if f.name != selected_file_name:
+            continue  # Only process one file at a time for display
+
         if f.size > MAX_MB * 1024 * 1024:
             st.error(
                 f"❌ File '{f.name}' is too large "
@@ -138,22 +143,20 @@ if uploaded_files:
             )
             st.stop()
 
-        # ---- Large but allowed file warning ----
-        if f.size > 100 * 1024 * 1024:   # >100MB warning
+        if f.size > 100 * 1024 * 1024:
             st.warning(
                 f"⚠ '{f.name}' is large ({f.size/1024/1024:.1f} MB). "
                 "Processing may take a while."
             )
 
-        # ---- Read file bytes ----
         audio_bytes = f.read()
-
-        # ---- Run the model ----
         df_raw = run_model(audio_bytes)
 
-        # ---- Display results per file ----
         st.write(f"### Results for: {f.name}")
         st.dataframe(df_raw)
+
+else:
+    st.info("Upload one or more audio files to begin analysis.")
 
 
 # =============================================================================
