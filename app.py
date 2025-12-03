@@ -122,19 +122,38 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-MAX_MB = 200   # limit per file
+MAX_MB = 200   # maximum allowed per file
 
 if uploaded_files:
+
+    file_names = [f.name for f in uploaded_files]  # safe here
+
     for f in uploaded_files:
+
+        # ---- File size check (must be inside the loop) ----
         if f.size > MAX_MB * 1024 * 1024:
-            st.error(f"❌ File '{f.name}' is too large. Max allowed is {MAX_MB} MB.")
+            st.error(
+                f"❌ File '{f.name}' is too large "
+                f"({f.size/1024/1024:.1f} MB). Max allowed is {MAX_MB} MB."
+            )
             st.stop()
 
-if f.size > 100 * 1024 * 1024:
-    st.warning(f"⚠ '{f.name}' is large ({f.size/1024/1024:.1f} MB). "
-               "Processing may take a while.")
+        # ---- Large but allowed file warning ----
+        if f.size > 100 * 1024 * 1024:   # >100MB warning
+            st.warning(
+                f"⚠ '{f.name}' is large ({f.size/1024/1024:.1f} MB). "
+                "Processing may take a while."
+            )
 
-file_names = [f.name for f in uploaded_files]
+        # ---- Read file bytes ----
+        audio_bytes = f.read()
+
+        # ---- Run the model ----
+        df_raw = run_model(audio_bytes)
+
+        # ---- Display results per file ----
+        st.write(f"### Results for: {f.name}")
+        st.dataframe(df_raw)
 
 
 # =============================================================================
