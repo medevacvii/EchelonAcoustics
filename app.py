@@ -124,39 +124,44 @@ uploaded_files = st.file_uploader(
 
 MAX_MB = 200
 
-if uploaded_files:
-
-    file_names = [f.name for f in uploaded_files]
-
-    # ---- File selector for multi-file mode ----
-    selected_file_name = st.selectbox("Select a file to inspect", file_names)
-
-    for f in uploaded_files:
-
-        if f.name != selected_file_name:
-            continue  # Only process one file at a time for display
-
-        if f.size > MAX_MB * 1024 * 1024:
-            st.error(
-                f"❌ File '{f.name}' is too large "
-                f"({f.size/1024/1024:.1f} MB). Max allowed is {MAX_MB} MB."
-            )
-            st.stop()
-
-        if f.size > 100 * 1024 * 1024:
-            st.warning(
-                f"⚠ '{f.name}' is large ({f.size/1024/1024:.1f} MB). "
-                "Processing may take a while."
-            )
-
-        audio_bytes = f.read()
-        df_raw = run_model(audio_bytes)
-
-        st.write(f"### Results for: {f.name}")
-        st.dataframe(df_raw)
-
-else:
+# Show nothing except instructions until files exist
+if not uploaded_files:
     st.info("Upload one or more audio files to begin analysis.")
+    st.stop()  # <-- CRITICAL: prevents selectbox from running
+
+# -------------------------------------------------------------------------
+# At this point, we KNOW files exist. Now it's safe to create file_names.
+# -------------------------------------------------------------------------
+
+file_names = [f.name for f in uploaded_files]
+
+# User chooses which file to inspect
+selected_file_name = st.selectbox("Select a file to inspect", file_names)
+
+# Process ONLY the selected file
+for f in uploaded_files:
+
+    if f.name != selected_file_name:
+        continue
+
+    if f.size > MAX_MB * 1024 * 1024:
+        st.error(
+            f"❌ File '{f.name}' is too large "
+            f"({f.size/1024/1024:.1f} MB). Max allowed is {MAX_MB} MB."
+        )
+        st.stop()
+
+    if f.size > 100 * 1024 * 1024:
+        st.warning(
+            f"⚠ '{f.name}' is large ({f.size/1024/1024:.1f} MB). "
+            "Processing may take a while."
+        )
+
+    audio_bytes = f.read()
+    df_raw = run_model(audio_bytes)
+
+    st.write(f"### Results for: {f.name}")
+    st.dataframe(df_raw)
 
 
 # =============================================================================
