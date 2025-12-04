@@ -45,17 +45,20 @@ def get_visualization_data(audio_bytes, max_vis_sec=10):
         if len(y_vis) < MIN_SAMPLES:
             return y_vis, sr_vis, None
 
-        # Mel Spectrogram (safe length)
+        # Compute mel spectrogram (no n_fft/hop_length override — use defaults)
         S = librosa.feature.melspectrogram(
             y=y_vis,
-            sr=sr_vis,
-            n_mels=128,
-            n_fft=2048,
-            hop_length=512,
+            sr=sr,
+            n_mels=128
         )
-        S_dB = librosa.power_to_db(S, ref=np.max)
+        
+        # Ensure width is reasonable for preview (cap extremely short frames)
+        if S.shape[1] == 0:
+            S = np.zeros((128, 1))
 
-        return y_vis, sr_vis, S_dB
+        S_db = librosa.power_to_db(S, ref=np.max)
+        
+        return y_vis, sr_vis, S_db
 
     except Exception as e:
         st.error(f"Visualization failed: {e}")
