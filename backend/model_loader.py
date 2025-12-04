@@ -9,21 +9,21 @@ def load_vgg_model(model_path, label_map_path):
 
     num_classes = len(label_map)
 
-    # Build model with the correct number of output classes
+    # Build the VGG model with the correct number of output neurons
     model = VGGSmall(num_classes=num_classes)
 
-    # Load checkpoint (state dict only)
+    # Load model weights
     state = torch.load(
         model_path,
         map_location="cpu",
-        weights_only=False  # ensure older checkpoints still load
+        weights_only=False
     )
 
-    # Some checkpoints might be wrapped like {"state_dict": ...}
+    # Some checkpoints may have state_dict wrapped
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
 
-    # This will still fail if the .pth is from the wrong architecture (e.g., 2-class)
+    # Load weights (will fail if architecture doesn't match the checkpoint)
     model.load_state_dict(state)
 
     model.eval()

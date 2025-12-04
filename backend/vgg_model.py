@@ -25,6 +25,7 @@ class VGGSmall(nn.Module):
             nn.Linear(256, num_classes)
         )
 
+
     def forward(self, x):
         x = self.features(x)
         x = x.view(x.size(0), -1)

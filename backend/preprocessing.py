@@ -1,12 +1,16 @@
 import io
 import soundfile as sf
 import numpy as np
-import soxr    # FAST resampler, avoids librosa's resampy dependency
+import soxr
+import librosa
 
 TARGET_SR = 22050
 
 def stream_audio_chunks(audio_bytes, chunk_duration=5.0):
-    """Yield audio chunks without loading full file into RAM."""
+    """
+    Stream large audio safely in chunks without loading everything into memory.
+    Uses soxr instead of librosa.resample to avoid missing 'resampy' dependency.
+    """
 
     bio = io.BytesIO(audio_bytes)
 
@@ -16,10 +20,11 @@ def stream_audio_chunks(audio_bytes, chunk_duration=5.0):
 
         while True:
             data = f.read(frames_per_chunk, dtype="float32")
+
             if len(data) == 0:
                 break
 
-            # SAFE resampling using soxr (no resampy dependency)
+            # Safe resample using soxr (fast, installed on Streamlit)
             if sr != TARGET_SR:
                 data = soxr.resample(data, sr, TARGET_SR)
 

@@ -8,6 +8,7 @@ pandas
 pydub
 resampy==0.4.3
 soundfile
+soxr==1.0.0
 transformers
 streamlit
 scikit-learn
