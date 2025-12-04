@@ -17,7 +17,7 @@ st.set_page_config(
     layout="wide"
 )
 
-MIN_SAMPLES = 2048  # must be >= n_fft for safe spectrograms
+MIN_SAMPLES = 2048
 
 # =============================================================================
 # SAFE VISUALIZATION FUNCTION (FIRST 10s ONLY)
