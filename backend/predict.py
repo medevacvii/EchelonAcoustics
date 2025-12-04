@@ -1,12 +1,17 @@
+import os
 import torch
 import librosa
 import numpy as np
 
-from backend.preprocessing import stream_audio_chunks
-from backend.model_loader import load_vgg_model
+from .preprocessing import stream_audio_chunks
+from .model_loader import load_vgg_model
 
-MODEL_PATH = "model/vgg_frog_model.pth"
-LABEL_MAP_PATH = "model/label_mapping.json"
+# Compute project root based on this file's location
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+
+MODEL_PATH = os.path.join(PROJECT_ROOT, "model", "vgg_frog_model.pth")
+LABEL_MAP_PATH = os.path.join(PROJECT_ROOT, "model", "label_mapping.json")
 
 # Load model once at import time
 model, label_map, device = load_vgg_model(MODEL_PATH, LABEL_MAP_PATH)

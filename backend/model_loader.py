@@ -1,6 +1,6 @@
 import torch
 import json
-from backend.vgg_model import VGGSmall
+from .vgg_model import VGGSmall
 
 def load_vgg_model(model_path, label_map_path):
     # Load label map
