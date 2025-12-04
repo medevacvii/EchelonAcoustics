@@ -51,9 +51,43 @@ def get_visualization_data(audio_bytes, max_vis_sec=10):
 
 
 # =============================================================================
+# SEGMENT AUDIO HELPER FOR PLAYBACK
+# =============================================================================
+def extract_segment_audio(audio_bytes, start_sec, end_sec):
+    """
+    Extract a precise audio segment [start_sec, end_sec] from the original file,
+    without loading the full file into RAM.
+    Returns raw WAV bytes suitable for st.audio().
+    """
+    try:
+        bio = io.BytesIO(audio_bytes)
+        with sf.SoundFile(bio) as f:
+            sr = f.samplerate
+            start_frame = int(start_sec * sr)
+            end_frame = int(end_sec * sr)
+            num_frames = max(0, end_frame - start_frame)
+
+            f.seek(start_frame)
+            segment = f.read(num_frames, dtype="float32")
+
+        if len(segment) == 0:
+            return None
+
+        out_bio = io.BytesIO()
+        sf.write(out_bio, segment, sr, format="WAV")
+        out_bio.seek(0)
+        return out_bio.read()
+
+    except Exception as e:
+        st.error(f"Failed to extract segment audio: {e}")
+        return None
+
+
+# =============================================================================
 # HEADER
 # =============================================================================
 st.title("🐸 Frog Call Classifier")
+
 st.write(
     "Upload frog audio recordings to analyze species, timestamps, "
     "and confidence scores. Supports very large audio files using safe streaming."
@@ -75,7 +109,6 @@ if not uploaded_files:
     st.stop()
 
 file_names = [f.name for f in uploaded_files]
-
 selected_file_name = st.selectbox("Select a file to inspect", file_names)
 
 # =============================================================================
@@ -86,6 +119,7 @@ for f in uploaded_files:
     if f.name != selected_file_name:
         continue
 
+    # ---- File size checks ----
     if f.size > MAX_MB * 1024 * 1024:
         st.error(
             f"❌ File '{f.name}' is too large "
@@ -99,6 +133,7 @@ for f in uploaded_files:
             "Processing may take a while."
         )
 
+    # Read bytes once – reused for visualization and segment playback
     audio_bytes = f.read()
 
     # =============================================================================
@@ -128,8 +163,6 @@ for f in uploaded_files:
         with col2:
             st.write("**Spectrogram**")
             fig, ax = plt.subplots(figsize=(7, 3))
-
-            # Correct spectrogram display — capture image handle
             img = librosa.display.specshow(
                 S_vis,
                 sr=sr_vis,
@@ -137,13 +170,12 @@ for f in uploaded_files:
                 y_axis="mel",
                 ax=ax
             )
-
             ax.set_title("Mel Spectrogram (dB, First 10 Seconds)")
             fig.colorbar(img, ax=ax, format="%+2.f dB")
             st.pyplot(fig)
 
     # =============================================================================
-    # STREAMING INFERENCE
+    # STREAMING INFERENCE (BACKEND MODEL)
     # =============================================================================
     st.subheader(f"📊 Model Detection Results for: {f.name}")
 
@@ -154,7 +186,7 @@ for f in uploaded_files:
     st.dataframe(df_raw, use_container_width=True)
 
     # =============================================================================
-    # TIMELINE PLOT
+    # SPECIES TIMELINE
     # =============================================================================
     st.subheader("📌 Species Timeline")
 
@@ -177,10 +209,76 @@ for f in uploaded_files:
     st.subheader("📊 Average Confidence per Species")
 
     if not df_raw.empty:
-        conf_summary = df_raw.groupby("species")["confidence"].mean().reset_index()
+        conf_summary = (
+            df_raw.groupby("species")["confidence"]
+            .mean()
+            .reset_index()
+            .sort_values("confidence", ascending=False)
+        )
         fig, ax = plt.subplots(figsize=(6, 3))
         ax.bar(conf_summary["species"], conf_summary["confidence"], color="skyblue")
         ax.set_ylim(0, 1)
+        ax.set_ylabel("Avg confidence")
         st.pyplot(fig)
+
+    # =============================================================================
+    # SEGMENT-LEVEL PLAYBACK (THIS IS WHAT YOU ASKED FOR)
+    # =============================================================================
+    st.subheader("🎯 Play Detected Frog Calls")
+
+    if df_raw.empty:
+        st.info("No detections found in this file.")
+    else:
+        # Species filter
+        species_options = ["All species"] + sorted(df_raw["species"].unique())
+        selected_species = st.selectbox(
+            "Filter detections by species",
+            species_options,
+            index=0
+        )
+
+        if selected_species == "All species":
+            df_play = df_raw.copy()
+        else:
+            df_play = df_raw[df_raw["species"] == selected_species].copy()
+
+        df_play = df_play.sort_values("start").reset_index(drop=True)
+
+        if df_play.empty:
+            st.warning("No detections for the selected species.")
+        else:
+            # Build human-readable options for each detection
+            options = [
+                f"{i+1}: {row['species']} "
+                f"{row['start']:.1f}–{row['end']:.1f}s "
+                f"(conf {row['confidence']:.2f})"
+                for i, row in df_play.iterrows()
+            ]
+
+            selected_idx = st.selectbox(
+                "Select a detection to play",
+                options,
+                index=0
+            )
+
+            # Map the string back to the row index
+            selected_row = df_play.iloc[options.index(selected_idx)]
+
+            st.write(
+                f"**Selected detection:** {selected_row['species']} "
+                f"from {selected_row['start']:.2f}s to {selected_row['end']:.2f}s "
+                f"(confidence {selected_row['confidence']:.3f})"
+            )
+
+            if st.button("▶️ Play this detected call"):
+                seg_bytes = extract_segment_audio(
+                    audio_bytes,
+                    float(selected_row["start"]),
+                    float(selected_row["end"])
+                )
+                if seg_bytes is None:
+                    st.error("Could not extract that segment from the audio.")
+                else:
+                    st.audio(seg_bytes, format="audio/wav")
 
     st.divider()
