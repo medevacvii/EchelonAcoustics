@@ -1,5 +1,6 @@
 import torch
 import librosa
+import numpy as np
 from backend.preprocessing import stream_audio_chunks
 from backend.model_loader import load_vgg_model
 
@@ -10,30 +11,50 @@ model, label_map, device = load_vgg_model(MODEL_PATH, LABEL_MAP_PATH)
 
 TARGET_SR = 22050
 N_MELS = 128
+FIXED_FRAMES = 128
 MIN_SAMPLES = 2048
 CHUNK_SEC = 5.0
+
+def preprocess_mel(chunk, sr):
+    # Resample if needed
+    if sr != TARGET_SR:
+        chunk = librosa.resample(chunk, orig_sr=sr, target_sr=TARGET_SR)
+        sr = TARGET_SR
+
+    # Compute mel spectrogram (MATCH TRAINING)
+    S = librosa.feature.melspectrogram(
+        y=chunk,
+        sr=TARGET_SR,
+        n_mels=N_MELS
+    )
+
+    # Force width to FIXED_FRAMES (MATCH TRAINING)
+    current = S.shape[1]
+    if current < FIXED_FRAMES:
+        pad = FIXED_FRAMES - current
+        S = np.pad(S, ((0, 0), (0, pad)), mode="constant")
+    else:
+        S = S[:, :FIXED_FRAMES]
+
+    # Convert to dB
+    S_db = librosa.power_to_db(S, ref=np.max)
+
+    # Final shape: (1, 128, 128)
+    return torch.tensor(S_db, dtype=torch.float32).unsqueeze(0)
 
 def analyze_audio(audio_bytes):
     detections = []
     start = 0.0
 
     for chunk, sr in stream_audio_chunks(audio_bytes, CHUNK_SEC):
-
         if chunk is None or len(chunk) < MIN_SAMPLES:
             start += CHUNK_SEC
             continue
 
-        S = librosa.feature.melspectrogram(
-            y=chunk,
-            sr=TARGET_SR,
-            n_mels=N_MELS,
-            n_fft=2048,
-            hop_length=512
-        )
-        S_db = librosa.power_to_db(S, ref=np.max)
+        # Preprocess
+        x = preprocess_mel(chunk, sr).unsqueeze(0).to(device)
 
-        x = torch.tensor(S_db).float().unsqueeze(0).unsqueeze(0).to(device)
-
+        # Model inference
         with torch.no_grad():
             logits = model(x)
             probs = torch.softmax(logits, dim=1)[0]
