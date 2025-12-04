@@ -6,6 +6,7 @@ numpy
 matplotlib
 pandas
 pydub
+resampy==0.4.3
 soundfile
 transformers
 streamlit

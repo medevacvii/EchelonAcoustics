@@ -1,19 +1,19 @@
 import torch
 import json
-from backend.vgg_model import VGGSmall  # import your model class
+from backend.vgg_model import VGGSmall   # must match exact filename
 
-def load_vgg_model(model_path: str, label_map: str):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def load_vgg_model(model_path, label_map_path):
+    with open(label_map_path, "r") as f:
+        label_map = json.load(f)
 
-    model = VGGSmall().to(device)
+    num_classes = len(label_map)
 
-    # Load only state dict
-    state = torch.load(model_path, map_location=device)
+    model = VGGSmall(num_classes=num_classes)
+    state = torch.load(model_path, map_location="cpu")
     model.load_state_dict(state)
-
     model.eval()
 
-    with open(label_map, "r") as f:
-        labels = json.load(f)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
 
-    return model, labels, device
+    return model, label_map, device
