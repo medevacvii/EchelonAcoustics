@@ -19,36 +19,30 @@ MIN_SAMPLES = 2048  # skip garbage 1-sample chunks etc.
 
 
 def preprocess_mel(chunk, sr):
-    """
-    Convert a raw audio chunk to a (1, 128, 128) Mel spectrogram tensor,
-    exactly matching the training pipeline.
-    """
-    # Resample to TARGET_SR if needed
     if sr != TARGET_SR:
         chunk = librosa.resample(chunk, orig_sr=sr, target_sr=TARGET_SR)
         sr = TARGET_SR
 
-    # Mel spectrogram (same settings as training)
     S = librosa.feature.melspectrogram(
         y=chunk,
         sr=TARGET_SR,
         n_mels=N_MELS
     )
 
-    # Force width to FIXED_FRAMES = 128
+    # Force width to FIXED_FRAMES
     current = S.shape[1]
     if current < FIXED_FRAMES:
-        pad = FIXED_FRAMES - current
-        S = np.pad(S, ((0, 0), (0, pad)), mode="constant")
+        S = np.pad(S, ((0, 0), (0, FIXED_FRAMES - current)), mode="constant")
     else:
         S = S[:, :FIXED_FRAMES]
 
-    # Convert to dB scale
     S_db = librosa.power_to_db(S, ref=np.max)
 
-    # (1, 128, 128)
-    return torch.tensor(S_db, dtype=torch.float32).unsqueeze(0)
+    # **CRITICAL: normalize to match training**
+    S_db = (S_db - S_db.min()) / (S_db.max() - S_db.min() + 1e-6)
+    S_db = S_db * 2 - 1  # [-1, 1]
 
+    return torch.tensor(S_db, dtype=torch.float32).unsqueeze(0)
 
 def analyze_audio(audio_bytes):
     """
