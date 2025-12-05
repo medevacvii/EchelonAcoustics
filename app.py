@@ -109,7 +109,7 @@ def extract_segment_audio(audio_bytes, start_sec, end_sec):
 # ==============================================================================
 st.set_page_config(page_title="Frog Call Classifier (Plotly)", layout="wide")
 
-st.title("🐸 Frog Call Classifier — Plotly Edition")
+st.title("🐸 Frog Call Classifier")
 st.write("Fully optimized with FFmpeg streaming + Plotly-only UI for stability.")
 
 
