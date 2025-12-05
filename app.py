@@ -143,17 +143,81 @@ for f in uploaded_files:
     st.subheader("🎧 Full Audio Playback")
     st.audio(audio_bytes)
 
-    # ==============================================================================
-    # PLOTLY WAVEFORM + SPECTROGRAM PREVIEW (ALWAYS ENABLED)
-    # ==============================================================================
-    st.subheader("📈 Audio Preview (First Few Seconds)")
-    fig_wave, fig_spec = get_preview_plotly(audio_bytes)
+    # ============================================================================
+# INTERACTIVE PREVIEW CONTROLS (FFmpeg-based)
+# ============================================================================
+st.subheader("📈 Audio Preview (Waveform + Spectrogram)")
 
-    if fig_wave:
-        st.plotly_chart(fig_wave, use_container_width=True)
-        st.plotly_chart(fig_spec, use_container_width=True)
-    else:
-        st.info("Could not generate preview.")
+# First: estimate duration safely
+duration_sec = None
+try:
+    with sf.SoundFile(io.BytesIO(audio_bytes)) as f:
+        duration_sec = len(f) / f.samplerate
+except:
+    duration_sec = None
+
+if duration_sec is None:
+    st.info("Could not determine audio duration for preview.")
+    preview_start = 0.0
+    preview_len = PREVIEW_SEC
+else:
+    st.write(f"Detected audio duration: **{duration_sec:.1f} seconds**")
+
+    # User chooses a preview window
+    preview_len = st.slider(
+        "Preview window size (seconds)",
+        min_value=2.0,
+        max_value=15.0,
+        value=5.0,
+        step=1.0
+    )
+
+    max_start = max(0.0, duration_sec - preview_len)
+
+    preview_start = st.slider(
+        "Preview start time (seconds)",
+        min_value=0.0,
+        max_value=float(max_start),
+        value=0.0,
+        step=0.5
+    )
+
+# Extract selected preview slice via FFmpeg
+y_vis, sr_vis = ffmpeg_preview_audio_bytes(
+    audio_bytes,
+    start_sec=preview_start,
+    duration_sec=preview_len
+)
+
+if y_vis is None or len(y_vis) < MIN_SAMPLES:
+    st.info("Preview slice is too short or unreadable.")
+else:
+    # ---------- Waveform Plotly ----------
+    t = np.linspace(0, len(y_vis)/sr_vis, len(y_vis))
+    fig_wave = go.Figure()
+    fig_wave.add_trace(go.Scatter(x=t, y=y_vis, mode="lines"))
+    fig_wave.update_layout(
+        title=f"Waveform Preview ({preview_start:.1f}s – {preview_start+preview_len:.1f}s)",
+        xaxis_title="Time (s)",
+        yaxis_title="Amplitude",
+        height=250,
+        template="plotly_white",
+    )
+    st.plotly_chart(fig_wave, use_container_width=True)
+
+    # ---------- Spectrogram Plotly ----------
+    S = librosa.feature.melspectrogram(y=y_vis, sr=sr_vis, n_mels=128)
+    S_db = librosa.power_to_db(S, ref=np.max)
+
+    fig_spec = go.Figure(data=go.Heatmap(z=S_db, colorscale="Viridis"))
+    fig_spec.update_layout(
+        title=f"Mel Spectrogram ({preview_start:.1f}s – {preview_start+preview_len:.1f}s)",
+        xaxis_title="Frame Index",
+        y_axis_title="Mel Bin",
+        height=250,
+        template="plotly_white",
+    )
+    st.plotly_chart(fig_spec, use_container_width=True)
 
     # ==============================================================================
     # MODEL INFERENCE (FFmpeg Streaming)
