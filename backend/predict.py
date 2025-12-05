@@ -73,42 +73,43 @@ def analyze_audio(audio_bytes):
 
     for chunk, sr in stream_audio_chunks(audio_bytes, CHUNK_SEC):
 
-    if chunk is None or len(chunk) < MIN_SAMPLES:
-        start += CHUNK_SEC
-        continue
+        # Skip invalid or tiny chunks
+        if chunk is None or len(chunk) < MIN_SAMPLES:
+            start += CHUNK_SEC
+            continue
 
-    mel = preprocess_mel(chunk, sr)
+        mel = preprocess_mel(chunk, sr)
 
-    # -------------------------------
-    # Silence / noise → no_frog
-    # -------------------------------
-    if mel is None:
+        # ------------------------------------
+        # Silence / low energy → no_frog
+        # ------------------------------------
+        if mel is None:
+            detections.append({
+                "start": start,
+                "end": start + CHUNK_SEC,
+                "species": "no_frog",
+                "confidence": 1.0
+            })
+            start += CHUNK_SEC
+            continue
+
+        # Normal inference path
+        x = mel.unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            logits = model(x)
+            probs = torch.softmax(logits, dim=1)[0]
+            conf, pred = probs.max(dim=0)
+
+        species = label_map[str(int(pred.item()))]
+
         detections.append({
             "start": start,
             "end": start + CHUNK_SEC,
-            "species": "no_frog",
-            "confidence": 1.0
+            "species": species,
+            "confidence": float(conf.item())
         })
-        start += CHUNK_SEC
-        continue
-    
-    # Normal inference path
-    x = mel.unsqueeze(0).to(device)
-    
-    with torch.no_grad():
-        logits = model(x)
-        probs = torch.softmax(logits, dim=1)[0]
-        conf, pred = probs.max(dim=0)
 
-    species = label_map[str(int(pred.item()))]
-    
-    detections.append({
-        "start": start,
-        "end": start + CHUNK_SEC,
-        "species": species,
-        "confidence": float(conf.item())
-    })
-    
-    start += CHUNK_SEC
-    
+        start += CHUNK_SEC
+
     return detections
