@@ -1,51 +1,58 @@
 import os
 import torch
-import librosa
 import numpy as np
+import librosa
 
-from .preprocessing import stream_audio_chunks
 from .model_loader import load_vgg_model
+from .ffmpeg_stream import ffmpeg_stream_audio_bytes  # NEW: true streaming decoder
 
-# Compute project root based on this file's location
+# ---------------------------------------------------------------------
+# PATH SETUP
+# ---------------------------------------------------------------------
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 
 MODEL_PATH = os.path.join(PROJECT_ROOT, "model", "vgg_frog_model.pth")
 LABEL_MAP_PATH = os.path.join(PROJECT_ROOT, "model", "label_mapping.json")
 
-# Load model once at import time
+# Load model once
 model, label_map, device = load_vgg_model(MODEL_PATH, LABEL_MAP_PATH)
 
+# ---------------------------------------------------------------------
+# CONSTANTS
+# ---------------------------------------------------------------------
 TARGET_SR = 22050
 N_MELS = 128
 FIXED_FRAMES = 128
-CHUNK_SEC = 5.0
-MIN_SAMPLES = 2048  # skip garbage 1-sample chunks etc.
+MIN_SAMPLES = 2048  # skip garbage chunks
+DEFAULT_CHUNK = 5.0  # seconds
 
 
+# =============================================================================
+# MEL PREPROCESSING WITH SILENCE GATE
+# =============================================================================
 def preprocess_mel(chunk, sr):
-    # ---------------------------------------------
-    # ENERGY GATE: detect silence / low-energy noise
-    # ---------------------------------------------
-    energy = np.mean(chunk ** 2)
+    """
+    Convert raw audio chunk (float32) into model-ready (1, 128, 128) mel tensor.
+    Includes energy gate → return None for silence.
+    """
 
-    # If the chunk has almost no energy, treat as "no frog".
+    # 1. Silence / low energy gate
+    energy = np.mean(chunk ** 2)
     if energy < 1e-4:
         return None
 
-    # Resample to TARGET_SR if needed
-    if sr != TARGET_SR:
-        chunk = librosa.resample(chunk, orig_sr=sr, target_sr=TARGET_SR)
-        sr = TARGET_SR
+    # 2. (Already mono + resampled by ffmpeg)
+    #    So sr == TARGET_SR always.
 
-    # Mel spectrogram (same settings as training)
+    # 3. Mel spectrogram
     S = librosa.feature.melspectrogram(
         y=chunk,
         sr=TARGET_SR,
         n_mels=N_MELS
     )
 
-    # Force width to FIXED_FRAMES = 128
+    # 4. Force width to FIXED_FRAMES=128
     current = S.shape[1]
     if current < FIXED_FRAMES:
         pad = FIXED_FRAMES - current
@@ -53,47 +60,67 @@ def preprocess_mel(chunk, sr):
     else:
         S = S[:, :FIXED_FRAMES]
 
-    # Convert to dB scale
+    # 5. Convert to dB
     S_db = librosa.power_to_db(S, ref=np.max)
 
-    # Normalize distribution to match training expectations
+    # 6. Normalize to [-1, 1]
     S_db = (S_db - S_db.min()) / (S_db.max() - S_db.min() + 1e-6)
-    S_db = S_db * 2 - 1  # [-1, 1]
+    S_db = S_db * 2 - 1
 
-    # (1, 128, 128)
+    # 7. Convert to tensor (1, 128, 128)
     return torch.tensor(S_db, dtype=torch.float32).unsqueeze(0)
 
+
+# =============================================================================
+# MAIN INFERENCE FUNCTION
+# =============================================================================
 def analyze_audio(audio_bytes):
     """
-    Stream over the uploaded audio, chunk it into 5-second windows,
-    run the VGG model on each window, and return a list of detections.
+    Streams large audio safely using ffmpeg.
+    Splits into chunks, runs mel preprocessing, then model inference.
+    Returns list of:
+    { start, end, species, confidence }
     """
+
     detections = []
     start = 0.0
 
-    for chunk, sr in stream_audio_chunks(audio_bytes, CHUNK_SEC):
+    # ------------------------------------------------------
+    # Dynamic chunk size: smaller for very large files
+    # ------------------------------------------------------
+    file_size_mb = len(audio_bytes) / (1024 * 1024)
 
-        # Skip invalid or tiny chunks
+    if file_size_mb > 200:
+        chunk_duration = 1.5
+    elif file_size_mb > 100:
+        chunk_duration = 3.0
+    else:
+        chunk_duration = DEFAULT_CHUNK
+
+    # ------------------------------------------------------
+    # FFmpeg true streaming chunk iterator
+    # ------------------------------------------------------
+    for chunk, sr in ffmpeg_stream_audio_bytes(audio_bytes, chunk_duration_sec=chunk_duration):
+
+        # Skip tiny or invalid chunks
         if chunk is None or len(chunk) < MIN_SAMPLES:
-            start += CHUNK_SEC
+            start += chunk_duration
             continue
 
         mel = preprocess_mel(chunk, sr)
 
-        # ------------------------------------
-        # Silence / low energy → no_frog
-        # ------------------------------------
+        # Silence or noise
         if mel is None:
             detections.append({
                 "start": start,
-                "end": start + CHUNK_SEC,
+                "end": start + chunk_duration,
                 "species": "no_frog",
                 "confidence": 1.0
             })
-            start += CHUNK_SEC
+            start += chunk_duration
             continue
 
-        # Normal inference path
+        # Normal inference
         x = mel.unsqueeze(0).to(device)
 
         with torch.no_grad():
@@ -105,11 +132,11 @@ def analyze_audio(audio_bytes):
 
         detections.append({
             "start": start,
-            "end": start + CHUNK_SEC,
+            "end": start + chunk_duration,
             "species": species,
             "confidence": float(conf.item())
         })
 
-        start += CHUNK_SEC
+        start += chunk_duration
 
     return detections
