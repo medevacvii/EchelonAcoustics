@@ -213,10 +213,11 @@ else:
     fig_spec.update_layout(
         title=f"Mel Spectrogram ({preview_start:.1f}s – {preview_start+preview_len:.1f}s)",
         xaxis_title="Frame Index",
-        y_axis_title="Mel Bin",
+        yaxis_title="Mel Bin",
         height=250,
         template="plotly_white",
     )
+
     st.plotly_chart(fig_spec, use_container_width=True)
 
     # ==============================================================================
