@@ -5,6 +5,7 @@ librosa
 numpy
 matplotlib
 pandas
+plotly
 pydub
 resampy==0.4.3
 soundfile
