@@ -15,106 +15,90 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from backend.predict import analyze_audio  # FFmpeg + model inference
+from backend.predict import analyze_audio
+from backend.ffmpeg_preview import ffmpeg_preview_audio_bytes  # NEW for preview
 
 
 # ------------------------------------------------------------------------------
-# CONSTANTS / LIMITS
+# CONSTANTS
 # ------------------------------------------------------------------------------
 MIN_SAMPLES = 2048
 MAX_ROWS_TO_DISPLAY = 500
 MAX_SEGMENTS_FOR_TIMELINE = 500
 MAX_PLAY_OPTIONS = 300
-LARGE_FILE_BYTES = 150 * 1024 * 1024   # 150 MB threshold to skip preview
-WAVEFORM_MAX_SEC = 10                  # preview limit
+PREVIEW_SEC = 5.0   # Preview duration (seconds)
+WAVEFORM_HEIGHT = 250
+SPEC_HEIGHT = 250
 
 
 # ==============================================================================
-# SAFE VISUALIZATION USING PLOTLY
+# WAVEFORM + SPECTROGRAM PREVIEW (PLOTLY + FFmpeg Safe Extraction)
 # ==============================================================================
-def get_waveform_and_spectrogram_plotly(audio_bytes, max_sec=WAVEFORM_MAX_SEC):
+def get_preview_plotly(audio_bytes, preview_sec=PREVIEW_SEC):
     """
-    Reads only the first few seconds of audio and returns:
-    - Plotly waveform figure
-    - Plotly spectrogram figure
-    More stable than matplotlib; safe for Streamlit Cloud.
+    Safely decode ONLY the first few seconds of audio using FFmpeg,
+    then generate waveform + mel spectrogram using Plotly.
     """
-
     try:
-        bio = io.BytesIO(audio_bytes)
+        y, sr = ffmpeg_preview_audio_bytes(audio_bytes, duration_sec=preview_sec)
 
-        with sf.SoundFile(bio) as f:
-            sr = f.samplerate
-            frames = min(len(f), int(sr * max_sec))
-            f.seek(0)
-            y = f.read(frames, dtype="float32")
-
-        if y is None or len(y) == 0:
+        if y is None or len(y) < MIN_SAMPLES:
             return None, None
 
-        # Force mono
-        if y.ndim > 1:
-            y = np.mean(y, axis=1)
-
-        # Waveform Plotly figure
-        t = np.linspace(0, len(y)/sr, len(y))
+        # ------------------- Waveform (Plotly) -------------------
+        t = np.linspace(0, len(y) / sr, len(y))
         fig_wave = go.Figure()
         fig_wave.add_trace(go.Scatter(x=t, y=y, mode="lines"))
         fig_wave.update_layout(
-            title="Waveform (Preview)",
+            title=f"Waveform Preview (First {preview_sec} sec)",
             xaxis_title="Time (s)",
             yaxis_title="Amplitude",
-            height=250,
+            height=WAVEFORM_HEIGHT,
+            template="plotly_white",
         )
 
-        # Spectrogram
+        # ------------------- Spectrogram (Plotly) -------------------
         S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
         S_db = librosa.power_to_db(S, ref=np.max)
 
         fig_spec = go.Figure(
-            data=go.Heatmap(
-                z=S_db,
-                colorscale="Viridis"
-            )
+            data=go.Heatmap(z=S_db, colorscale="Viridis")
         )
         fig_spec.update_layout(
-            title="Mel Spectrogram (Preview, dB)",
+            title=f"Mel Spectrogram Preview (First {preview_sec} sec)",
             xaxis_title="Frame Index",
             yaxis_title="Mel Bin",
-            height=250,
+            height=SPEC_HEIGHT,
+            template="plotly_white",
         )
 
         return fig_wave, fig_spec
 
     except Exception as e:
-        st.error(f"Plotly preview failed: {e}")
+        st.error(f"Preview failed: {e}")
         return None, None
 
 
 # ==============================================================================
-# BACKEND AUDIO SEGMENT EXTRACTION FOR PLAYBACK
+# AUDIO SEGMENT EXTRACTION FOR PLAYBACK
 # ==============================================================================
 def extract_segment_audio(audio_bytes, start_sec, end_sec):
-    """
-    Extracts a segment safely, independent of preview size.
-    """
     try:
         bio = io.BytesIO(audio_bytes)
         with sf.SoundFile(bio) as f:
             sr = f.samplerate
             start_frame = int(start_sec * sr)
             end_frame = int(end_sec * sr)
-
             f.seek(start_frame)
             segment = f.read(end_frame - start_frame, dtype="float32")
 
         if segment is None or len(segment) == 0:
             return None
 
-        out = io.BytesIO()
-        sf.write(out, segment, sr, format="WAV")
-        out.seek(0)
-        return out.read()
+        output = io.BytesIO()
+        sf.write(output, segment, sr, format="WAV")
+        output.seek(0)
+        return output.read()
 
     except Exception:
         return None
@@ -123,14 +107,14 @@ def extract_segment_audio(audio_bytes, start_sec, end_sec):
 # ==============================================================================
 # STREAMLIT PAGE CONFIG
 # ==============================================================================
-st.set_page_config(page_title="Frog Call Classifier", layout="wide")
+st.set_page_config(page_title="Frog Call Classifier (Plotly)", layout="wide")
 
-st.title("🐸 Frog Call Classifier (Plotly-Only Edition)")
-st.write("This version uses Plotly everywhere for maximum Streamlit Cloud stability.")
+st.title("🐸 Frog Call Classifier — Plotly Edition")
+st.write("Fully optimized with FFmpeg streaming + Plotly-only UI for stability.")
 
 
 # ==============================================================================
-# FILE UPLOADER
+# FILE UPLOAD
 # ==============================================================================
 uploaded_files = st.file_uploader(
     "Upload frog audio file(s) (WAV/MP3)",
@@ -143,43 +127,40 @@ if not uploaded_files:
     st.stop()
 
 file_names = [f.name for f in uploaded_files]
-selected_file_name = st.selectbox("Select a file to inspect", file_names)
+selected_file_name = st.selectbox("Select a file to analyze", file_names)
 
 
 # ==============================================================================
-# PROCESS USER-SELECTED FILE
+# PROCESS SELECTED FILE
 # ==============================================================================
 for f in uploaded_files:
-
     if f.name != selected_file_name:
         continue
 
     audio_bytes = f.read()
 
-    st.subheader(f"🎧 Full Audio Playback — {f.name}")
+    # ---- Full Audio Playback ----
+    st.subheader("🎧 Full Audio Playback")
     st.audio(audio_bytes)
 
-    # ======================================================================
-    # WAVEFORM + SPECTROGRAM PREVIEW (Plotly)
-    # ======================================================================
-    st.subheader("📈 Preview (Waveform + Spectrogram)")
-
-    if len(audio_bytes) > LARGE_FILE_BYTES:
-        st.warning("Preview skipped: file exceeds safe preview size.")
-        fig_wave = fig_spec = None
-    else:
-        fig_wave, fig_spec = get_waveform_and_spectrogram_plotly(audio_bytes)
+    # ==============================================================================
+    # PLOTLY WAVEFORM + SPECTROGRAM PREVIEW (ALWAYS ENABLED)
+    # ==============================================================================
+    st.subheader("📈 Audio Preview (First Few Seconds)")
+    fig_wave, fig_spec = get_preview_plotly(audio_bytes)
 
     if fig_wave:
         st.plotly_chart(fig_wave, use_container_width=True)
         st.plotly_chart(fig_spec, use_container_width=True)
+    else:
+        st.info("Could not generate preview.")
 
-    # ======================================================================
-    # RUN MODEL VIA FFmpeg STREAMING
-    # ======================================================================
+    # ==============================================================================
+    # MODEL INFERENCE (FFmpeg Streaming)
+    # ==============================================================================
     st.subheader("🤖 Model Detection Results")
 
-    with st.spinner("Analyzing full audio (streaming inference)..."):
+    with st.spinner("Running streaming inference..."):
         detections = analyze_audio(audio_bytes)
 
     df_raw = pd.DataFrame(detections)
@@ -190,10 +171,10 @@ for f in uploaded_files:
 
     total_duration = float(df_raw["end"].max())
 
-    # ======================================================================
-    # CONFIDENCE FILTERS (PER SPECIES)
-    # ======================================================================
-    st.subheader("🎚 Per-Species Confidence Threshold Filters")
+    # ==============================================================================
+    # PER-SPECIES CONFIDENCE FILTERS
+    # ==============================================================================
+    st.subheader("🎚 Confidence Thresholds (Per Species)")
 
     species_list = sorted(df_raw["species"].unique())
     cols = st.columns(len(species_list))
@@ -202,7 +183,7 @@ for f in uploaded_files:
     for i, sp in enumerate(species_list):
         with cols[i]:
             thresholds[sp] = st.slider(
-                f"{sp}",
+                sp,
                 0.0, 1.0,
                 0.0, 0.05
             )
@@ -214,47 +195,52 @@ for f in uploaded_files:
         ]
 
     if df_filtered.empty:
-        st.error("All detections filtered out.")
+        st.error("All detections filtered out by thresholds.")
         st.stop()
 
-    # ======================================================================
+    # ==============================================================================
     # CSV EXPORT
-    # ======================================================================
-    csv_bytes = df_filtered.to_csv(index=False).encode("utf-8")
+    # ==============================================================================
+    st.subheader("⬇ Export")
+    csv_data = df_filtered.to_csv(index=False).encode("utf-8")
     st.download_button(
-        "⬇ Download Filtered Detections (CSV)",
-        csv_bytes,
+        "Download Filtered Detections (CSV)",
+        csv_data,
         file_name=f"{selected_file_name}_detections.csv",
         mime="text/csv"
     )
 
-    # ======================================================================
-    # TABLE VIEW (LIMITED)
-    # ======================================================================
+    # ==============================================================================
+    # TABLE VIEW
+    # ==============================================================================
     st.subheader("📋 Detection Table")
 
     if len(df_filtered) > MAX_ROWS_TO_DISPLAY:
-        st.warning(f"Showing first {MAX_ROWS_TO_DISPLAY} of {len(df_filtered)} rows.")
+        st.warning(f"Showing first {MAX_ROWS_TO_DISPLAY} rows.")
         st.dataframe(df_filtered.head(MAX_ROWS_TO_DISPLAY))
     else:
         st.dataframe(df_filtered)
 
-    # ======================================================================
+    # ==============================================================================
     # INTERACTIVE TIMELINE (PLOTLY)
-    # ======================================================================
-    st.subheader("📌 Species Timeline (Interactive Plotly)")
+    # ==============================================================================
+    st.subheader("📌 Species Timeline")
 
-    # WINDOWED MODE FOR LARGE FILES
+    # Windowing for large audio
     if len(df_filtered) > MAX_SEGMENTS_FOR_TIMELINE:
-        st.warning(f"Large file: {len(df_filtered)} detections. Timeline windowing enabled.")
+        st.warning("Large number of detections — timeline windowing enabled.")
 
         window_size = st.slider(
-            "Window size (seconds)",
-            30.0, total_duration, 120.0, step=10.0
+            "Timeline window (seconds)",
+            30.0, total_duration,
+            120.0, step=10.0
         )
+        max_start = max(0.0, total_duration - window_size)
+
         window_start = st.slider(
-            "Window start (seconds)",
-            0.0, total_duration - window_size, 0.0, step=5.0
+            "Start time (seconds)",
+            0.0, max_start,
+            0.0, step=5.0
         )
         window_end = window_start + window_size
 
@@ -264,15 +250,13 @@ for f in uploaded_files:
         ]
         st.write(f"Showing {len(df_timeline)} detections in this window.")
     else:
-        df_timeline = df_filtered
+        df_timeline = df_filtered.copy()
 
     if df_timeline.empty:
         st.info("No detections in this window.")
     else:
-
         fig = go.Figure()
 
-        # Unique deterministic colors
         species_colors = {
             sp: f"rgba({50+(hash(sp)%200)}, {50+((hash(sp)*7)%200)}, {50+((hash(sp)*13)%200)}, 0.85)"
             for sp in species_list
@@ -296,42 +280,46 @@ for f in uploaded_files:
 
         st.plotly_chart(fig, use_container_width=True)
 
-    # ======================================================================
-    # PLAYBACK (FILTERED + WINDOWED)
-    # ======================================================================
+    # ==============================================================================
+    # PLAYBACK
+    # ==============================================================================
     st.subheader("🎯 Play Detected Calls")
 
     df_play = df_timeline.copy()
-
     species_opt = ["All species"] + sorted(df_play["species"].unique())
-    selected_species = st.selectbox("Filter by species", species_opt)
+    chosen_sp = st.selectbox("Filter species for playback", species_opt)
 
-    if selected_species != "All species":
-        df_play = df_play[df_play["species"] == selected_species]
-
-    df_play = df_play.sort_values("start").reset_index(drop=True)
+    if chosen_sp != "All species":
+        df_play = df_play[df_play["species"] == chosen_sp]
 
     if df_play.empty:
-        st.warning("No detections available for playback.")
+        st.warning("No detections for playback.")
         st.stop()
 
+    df_play = df_play.sort_values("start")
+
     if len(df_play) > MAX_PLAY_OPTIONS:
-        st.warning(f"Showing first {MAX_PLAY_OPTIONS} detections for playback.")
+        st.warning(f"Showing first {MAX_PLAY_OPTIONS} detections.")
         df_play = df_play.head(MAX_PLAY_OPTIONS)
 
     opts = [
-        f"{i+1}: {row['species']} {row['start']:.1f}–{row['end']:.1f}s (conf {row['confidence']:.2f})"
+        f"{i+1}: {row['species']} {row['start']:.1f}–{row['end']:.1f}s "
+        f"(conf {row['confidence']:.2f})"
         for i, row in df_play.iterrows()
     ]
 
-    selected_idx = st.selectbox("Select detection to play", opts)
-    idx = opts.index(selected_idx)
-    selected_row = df_play.iloc[idx]
+    chosen_idx = st.selectbox("Select a detection to play", opts)
+    idx = opts.index(chosen_idx)
+    chosen_row = df_play.iloc[idx]
 
     if st.button("▶ Play selected call"):
-        seg = extract_segment_audio(audio_bytes, selected_row["start"], selected_row["end"])
-        if seg:
-            st.audio(seg, format="audio/wav")
+        seg_bytes = extract_segment_audio(
+            audio_bytes,
+            chosen_row["start"],
+            chosen_row["end"]
+        )
+        if seg_bytes:
+            st.audio(seg_bytes, format="audio/wav")
         else:
             st.error("Unable to extract segment.")
 
